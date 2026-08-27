@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>188 Days — Dark Fullscreen (Supabase-backed Pins)</title>
+  <style>
+    :root{
+      --track-height: 12px;
+      --pin-size: 14px;
+      --pin-gap: 6px;
+      --pin-color: #0a4a86;
+      --pin-stem: #000000;
+      --primary: #0a4a86;
+      --primary-strong: #083a6a;
+      --bg: #071428;
+      --muted-text: rgba(255,255,255,0.75);
+      --accent: #8fd3ff;
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    html,body{
+      height:100%;
+      margin:0;
+      background:var(--bg);
+      color:var(--muted-text);
+      -webkit-font-smoothing:antialiased;
+    }
+    .wrap{ height:100vh; width:100vw; display:flex; align-items:center; justify-content:center; padding:24px; box-sizing:border-box; }
+    .panel{
+      width:100%;
+      height:100%;
+      max-width:1200px;
+      border-radius:12px;
+      padding:20px;
+      box-sizing:border-box;
+      background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+      backdrop-filter: blur(6px);
+      box-shadow: 0 10px 40px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.02);
+      display:flex; flex-direction:column; gap:12px;
+    }
+
+    /* Header (months removed) */
+    header {
+      display:flex;
+      flex-direction:column;
+      gap:4px;
+      color:var(--muted-text);
+    }
+    h2 { margin:0; font-weight:700; color:#eaf6ff; font-size:22px; }
+
+    .timeline { position:relative; flex:1; min-height:380px; border-radius:10px; padding:18px 18px 28px 18px; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; }
+    .track {
+      position:relative;
+      height:var(--track-height);
+      background:linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+      border-radius:999px;
+      margin:16px 0 12px;
+      overflow:visible;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.02), 0 4px 18px rgba(0,0,0,0.6);
+    }
+    .track .progress { position:absolute; left:0; top:0; bottom:0; width:0%; background: linear-gradient(90deg, var(--primary), var(--primary-strong)); border-radius:999px; transition: width 120ms linear; z-index:2; box-shadow: 0 8px 24px rgba(10,74,134,0.18); }
+    .track .pins { position:absolute; left:0; right:0; top:0; bottom:0; pointer-events:none; z-index:4; }
+
+    /* Indicator sits on the bar and is draggable */
+    .indicator {
+      position:absolute;
+      top: calc(-1 * (var(--track-height) / 2 + 18px));
+      transform:translateX(-50%);
+      width:3px;
+      height: calc(var(--track-height) + 36px);
+      background: linear-gradient(180deg,var(--primary),var(--primary-strong));
+      border-radius:3px;
+      z-index:9;
+      cursor: ew-resize;
+      box-shadow: 0 8px 30px rgba(10,74,134,0.22);
+      user-select: none;
+      touch-action: pan-x;
+    }
+    .indicator .date {
+      position:absolute;
+      top:-44px;
+      left:50%;
+      transform:translateX(-50%);
+      background: rgba(6,10,20,0.85);
+      color: #eaf6ff;
+      padding:8px 12px;
+      border-radius:8px;
+      font-size:13px;
+      box-shadow:0 8px 20px rgba(0,0,0,0.6);
+      border:1px solid rgba(255,255,255,0.03);
+      white-space:nowrap;
+      text-align:center;
+      min-width:140px;
+      pointer-events:none;
+    }
+    .indicator .sub { display:block; margin-top:6px; font-size:12px; color:rgba(255,255,255,0.9); }
+
+    .pin { position:absolute; bottom: calc(100% + var(--pin-gap)); width:var(--pin-size); height:var(--pin-size); border-radius:50%; background: var(--pin-color); border:2px solid rgba(255,255,255,0.06); transform:translateX(-50%); box-shadow:0 8px 20px rgba(10,74,134,0.28); cursor:pointer; pointer-events:auto; z-index:6; }
+    .pin::after{ content:''; position:absolute; top:100%; left:50%; transform:translateX(-50%); width:2px; height:var(--pin-gap); background:var(--pin-stem); border-radius:1px; z-index:6; }
+    .pin .label { display:none; position:absolute; bottom: calc(100% + var(--pin-gap) + 4px); left:50%; transform:translateX(-50%); background: rgba(6,10,20,0.85); color:#eaf6ff; padding:8px 10px; border-radius:8px; font-size:13px; white-space:nowrap; box-shadow:0 8px 22px rgba(0,0,0,0.6); z-index:12; border:1px solid rgba(255,255,255,0.02); }
+    .pin:hover .label, .pin.show .label { display:block; }
+
+    .controls { display:flex; gap:12px; align-items:center; margin-top:6px; flex-wrap:wrap; }
+    .btn{ background:var(--primary); color:white; border:none; padding:10px 14px; border-radius:10px; cursor:pointer; font-weight:700; box-shadow: 0 8px 20px rgba(10,74,134,0.18); }
+    .btn.secondary{ background:transparent; color:var(--primary); border:1px solid rgba(10,74,134,0.18); font-weight:600; box-shadow:none; }
+    .small{ font-size:14px; } .form-row{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    input[type="date"], input[type="text"], input[type="number"]{ padding:10px; border-radius:10px; border:1px solid rgba(255,255,255,0.04); background: rgba(255,255,255,0.02); color:var(--muted-text); outline:none; }
+    input[type="range"]{ cursor: pointer; } label.meta { color:var(--muted-text); display:flex; gap:8px; align-items:center; }
+
+    .settings { display:flex; gap:12px; align-items:center; background: rgba(255,255,255,0.01); padding:8px; border-radius:10px; border:1px solid rgba(255,255,255,0.02); }
+    .settings label { font-size:13px; color:var(--muted-text); display:flex; gap:8px; align-items:center; }
+    .settings input[type="color"] { width:40px; height:32px; padding:3px; border-radius:6px; border:none; cursor:pointer; }
+
+    @media (max-width:900px){ .panel{ padding:14px; } .timeline{ min-height:420px; } .indicator { height: calc(var(--track-height) + 58px); } }
+    @media (max-width:560px){ .timeline{ min-height:520px; padding:18px; } .controls{ gap:8px; } .btn{ padding:8px 10px; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel" role="main">
+      <header>
+        <h2>188 Days</h2>
+      </header>
+
+      <div class="timeline" id="timeline">
+        <div class="track" id="track">
+          <div class="progress" id="progress"></div>
+          <div class="pins" id="pins"></div>
+
+          <!-- indicator is inside the track so the line is on the bar -->
+          <div class="indicator" id="indicator" style="left:0%;">
+            <div class="date" id="indicator-date">—<span class="sub" id="indicator-sub"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="controls" style="align-items:center;">
+        <button class="btn" id="playPause">Play</button>
+
+        <label class="meta small" style="align-items:center">
+          <input type="checkbox" id="trackToday" style="margin-right:8px"/> Track today
+        </label>
+
+        <div class="meta small" style="align-items:center">
+          Speed:
+          <input type="range" id="speed" min="0.1" max="6" value="1" step="0.1" style="vertical-align:middle; margin-left:8px"/>
+          <span id="speedVal" style="margin-left:6px; color:var(--accent)">1×</span>
+        </div>
+
+        <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+          <div class="form-row">
+            <input type="date" id="pinDate" />
+            <input type="text" id="pinLabel" placeholder="Event label" />
+            <button class="btn secondary" id="addPin">Add pin</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:space-between; gap:12px; align-items:center;">
+        <div class="settings" role="region" aria-label="Pin settings">
+          <label>Pin color: <input type="color" id="pinColor" value="#0a4a86" title="Pin color"/></label>
+          <label>Stem color: <input type="color" id="stemColor" value="#000000" title="Stem color"/></label>
+        </div>
+
+        <div style="display:flex; gap:8px; align-items:center;">
+          <!-- Export still available (downloads current pins to a JSON file) -->
+          <button class="btn secondary" id="downloadPinsBtn">Download pins</button>
+          <!-- Upload a previously exported JSON file and INSERT into Supabase -->
+          <input type="file" id="loadFileInput" accept="application/json" style="display:none"/>
+          <button class="btn secondary" id="loadPinsBtn">Load pins file</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Supabase JS (v2) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/supabase.min.js"></script>
+
+<script>
+/*
+  Supabase integration notes and required setup (PUT THESE INTO YOUR SUPABASE PROJECT):
+
+  1) In this file set SUPABASE_URL and SUPABASE_ANON_KEY below exactly where indicated.
+     - SUPABASE_URL example: https://xyzabc123.supabase.co
+     - SUPABASE_ANON_KEY is the "anon" / publishable key from your Supabase project's Settings > API > Project API keys.
+     - DO NOT use the service_role key here. The service_role key must never be exposed in frontend code.
+
+  2) Create a table called "pins" in your Supabase database with the following simple schema:
+     -- Example SQL (run in Supabase SQL editor):
+     create table public.pins (
+       id uuid default uuid_generate_v4() primary key,
+       date date not null,
+       title text not null,
+       created_at timestamptz default now()
+     );
+
+     -- If uuid_generate_v4() is not available, use: extension "pgcrypto"; or generate client-side.
+     -- For local testing you can also use "id serial primary key" if you prefer numeric ids.
+
+  3) Row Level Security (RLS) & policies:
+     - For a quick test you can allow public selects and inserts (NOT recommended for production).
+       Example (development/testing only):
+         alter table public.pins enable row level security;
+         create policy "Allow public read" on public.pins for select using (true);
+         create policy "Allow public insert" on public.pins for insert with check (true);
+
+     - For production, you should enable authentication and write stricter policies (e.g., only authenticated users may insert).
+       See Supabase docs: https://supabase.com/docs/guides/auth
+
+  4) This frontend will:
+     - fetch all rows from the pins table on load,
+     - subscribe to realtime INSERTs and append them to the timeline when any client inserts a pin,
+     - insert new pins into the table when the Add pin button is used.
+
+  5) Replace SUPABASE_URL and SUPABASE_ANON_KEY below with your project's values.
+*/
+
+///// INSERT YOUR SUPABASE VALUES HERE (REQUIRED) /////
+const SUPABASE_URL = 'https://your-project-id.supabase.co'; // <-- put your Supabase URL here
+const SUPABASE_ANON_KEY = 'public-anon-or-publishable-key'; // <-- put your anon/publishable key here
+//////////////////////////////////////////////////////
+
+// Initialize Supabase client (v2)
+const supabase = supabaseJs.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Timeline configuration (unchanged)
+const START = new Date('2026-07-04T00:00:00Z');
+const END   = new Date('2027-01-08T23:59:59Z');
+const totalMs = END - START;
+
+// Local runtime pin list (mirrors DB rows)
+let pinsData = [];
+
+// DOM refs
+const trackEl = document.getElementById('track');
+const pinsEl = document.getElementById('pins');
+const indicator = document.getElementById('indicator');
+const indicatorDate = document.getElementById('indicator-date');
+const indicatorSub = document.getElementById('indicator-sub');
+const playPauseBtn = document.getElementById('playPause');
+const speedInput = document.getElementById('speed');
+const speedVal = document.getElementById('speedVal');
+const addPinBtn = document.getElementById('addPin');
+const pinDateInput = document.getElementById('pinDate');
+const pinLabelInput = document.getElementById('pinLabel');
+const trackTodayCheckbox = document.getElementById('trackToday');
+const progressEl = document.getElementById('progress');
+
+const pinColorInput = document.getElementById('pinColor');
+const stemColorInput = document.getElementById('stemColor');
+const downloadPinsBtn = document.getElementById('downloadPinsBtn');
+const loadPinsBtn = document.getElementById('loadPinsBtn');
+const loadFileInput = document.getElementById('loadFileInput');
+
+// Helper utilities
+function dateToPercent(d){
+  const t = (new Date(d) - START) / totalMs;
+  return Math.min(100, Math.max(0, t * 100));
+}
+function escapeHtml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// Render pins from pinsData
+function renderPins(){
+  pinsEl.innerHTML = '';
+  pinsData.forEach((p) => {
+    const percent = dateToPercent(p.date);
+    const el = document.createElement('div');
+    el.className = 'pin';
+    el.style.left = percent + '%';
+    el.title = (p.title || '') + ' — ' + p.date;
+    el.style.background = getComputedStyle(document.documentElement).getPropertyValue('--pin-color').trim();
+    el.innerHTML = `<div class="label"><strong>${escapeHtml(p.title)}</strong><div style="font-size:12px;color:rgba(255,255,255,0.8)">${p.date}</div></div>`;
+    el.addEventListener('click', () => el.classList.toggle('show'));
+    el.addEventListener('mouseenter', ()=> el.classList.add('show'));
+    el.addEventListener('mouseleave', ()=> el.classList.remove('show'));
+    pinsEl.appendChild(el);
+  });
+}
+
+// Update progress bar and indicator
+function updateProgressAndIndicatorFromMs(msFromStart){
+  const pct = (msFromStart / totalMs) * 100;
+  const clampedPct = Math.min(100, Math.max(0, pct));
+  progressEl.style.width = clampedPct + '%';
+  indicator.style.left = clampedPct + '%';
+  const curDate = new Date(START.getTime() + msFromStart);
+  indicatorDate.childNodes[0].nodeValue = curDate.toISOString().slice(0,10);
+}
+
+/* Supabase functions */
+
+// Fetch all pins from Supabase and populate local pinsData
+async function loadPinsFromSupabase(){
+  try {
+    // We select id, date, title (and created_at to optionally order)
+    const { data, error } = await supabase
+      .from('pins')
+      .select('id, date, title, created_at')
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('Error loading pins from Supabase:', error);
+      alert('Failed to load pins from Supabase (check console).');
+      return;
+    }
+    // Map results into pinsData (ensure date is YYYY-MM-DD string)
+    pinsData = (data || []).map(r => ({ id: r.id, date: (r.date instanceof Date ? r.date.toISOString().slice(0,10) : String(r.date)), title: r.title }));
+    renderPins();
+  } catch (err) {
+    console.error('Unexpected error loading pins:', err);
+  }
+}
+
+// Insert a single pin into Supabase. Returns inserted row or null.
+async function insertPinToSupabase({ date, title }){
+  try {
+    // Insert and return the inserted row (select)
+    const { data, error } = await supabase
+      .from('pins')
+      .insert([{ date, title }])
+      .select('id, date, title, created_at');
+
+    if (error) {
+      console.error('Failed to insert pin:', error);
+      alert('Failed to add pin (check console).');
+      return null;
+    }
+    // data is array of inserted rows
+    return (data && data[0]) || null;
+  } catch (err) {
+    console.error('Unexpected insert error:', err);
+    return null;
+  }
+}
+
+// Subscribe to realtime INSERTs on pins table and add them locally
+let pinsRealtimeSubscription = null;
+function subscribeToPinInserts(){
+  // Unsubscribe if exists
+  if (pinsRealtimeSubscription) {
+    try { pinsRealtimeSubscription.unsubscribe(); } catch(e) {}
+    pinsRealtimeSubscription = null;
+  }
+
+  // Using the v2 realtime API (channel)
+  pinsRealtimeSubscription = supabase.channel('realtime-pins')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pins' }, payload => {
+      const newRow = payload.new;
+      // Normalize date to YYYY-MM-DD
+      const dateStr = (newRow.date instanceof Date) ? newRow.date.toISOString().slice(0,10) : String(newRow.date);
+      // Avoid duplicate if we already have the id
+      if (!pinsData.some(p => p.id === newRow.id)) {
+        pinsData.push({ id: newRow.id, date: dateStr, title: newRow.title });
+        // Keep pins sorted by created_at roughly (new ones append at end)
+        renderPins();
+      }
+    })
+    .subscribe(status => {
+      // subscription callback optional: log status for debugging
+      // console.log('Realtime status:', status);
+    });
+}
+
+// Utility: export pins to JSON download
+function downloadPinsFile(){
+  const blob = new Blob([JSON.stringify(pinsData, null, 2)], {type:'application/json'});
+  const name = `timeline-pins-${new Date().toISOString().slice(0,10)}.json`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+
+// Load pins file (JSON array) and insert into Supabase (batch)
+function loadPinsFileAndInsert(file){
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = async () => {
+      try {
+        const parsed = JSON.parse(r.result);
+        if (!Array.isArray(parsed)) throw new Error('Invalid format: expected array of {date, title}');
+        // Validate items and prepare insert array
+        const inserts = parsed.map(item => {
+          if (!item.date || !item.title) throw new Error('Each pin must have date and title');
+          return { date: item.date, title: item.title };
+        });
+        // Insert in a single call (Supabase will return inserted rows)
+        const { data, error } = await supabase.from('pins').insert(inserts).select('id, date, title, created_at');
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(data);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    r.onerror = () => reject(new Error('File read error'));
+    r.readAsText(file);
+  });
+}
+
+/* UI: Add pin handler — inserts to Supabase (not localStorage) */
+addPinBtn.addEventListener('click', async () => {
+  const d = pinDateInput.value;
+  const label = (pinLabelInput.value || 'Event').trim();
+  if (!d) { alert('Pick a date (YYYY-MM-DD).'); return; }
+  // Basic range check: if out of range ask confirm
+  const dd = new Date(d + 'T00:00:00Z');
+  if (dd < START || dd > END){
+    if (!confirm('Date is outside the timeline range. Add anyway?')) return;
+  }
+  // Insert into Supabase
+  const inserted = await insertPinToSupabase({ date: d, title: label });
+  if (inserted) {
+    // The realtime subscription will pick this up and add to pinsData; but we can also optimistically add here
+    if (!pinsData.some(p => p.id === inserted.id)) {
+      pinsData.push({ id: inserted.id, date: inserted.date, title: inserted.title });
+      renderPins();
+    }
+    pinDateInput.value = '';
+    pinLabelInput.value = '';
+  }
+});
+
+// Download/export
+downloadPinsBtn.addEventListener('click', () => downloadPinsFile());
+
+// Load file UI -> insert into Supabase
+loadPinsBtn.addEventListener('click', () => loadFileInput.click());
+loadFileInput.addEventListener('change', (ev) => {
+  const f = ev.target.files && ev.target.files[0];
+  if (!f) return;
+  loadPinsFileAndInsert(f).then((insertedRows) => {
+    // insertedRows will fire realtime events too, but we can merge now
+    if (Array.isArray(insertedRows)) {
+      insertedRows.forEach(r => {
+        const dateStr = (r.date instanceof Date) ? r.date.toISOString().slice(0,10) : String(r.date);
+        if (!pinsData.some(p => p.id === r.id)) pinsData.push({ id: r.id, date: dateStr, title: r.title });
+      });
+      renderPins();
+    }
+    alert('Pins loaded from file and inserted to Supabase.');
+  }).catch(err => {
+    console.error('Failed to load pins file:', err);
+    alert('Failed to load pins file (check console).');
+  }).finally(()=> { loadFileInput.value = ''; });
+});
+
+/* Tracking, drag, play/pause, and indicator logic (left unchanged) */
+let playing = false;
+let playSpeed = parseFloat(speedInput.value) || 1;
+let currentMs = 0;
+let lastRAF = null;
+let trackInterval = null;
+let tracking = false;
+
+function nowMsFromStart(){ return Date.now() - START.getTime(); }
+
+function getNowInEasternISO(){
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false
+  }).formatToParts(now).reduce((acc, p) => { if (p.type !== 'literal') acc[p.type] = p.value; return acc; }, {});
+  if (!parts.year) return '';
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ET`;
+}
+
+function enableControlsForTracking(enabled){ playPauseBtn.disabled = enabled; speedInput.disabled = enabled; }
+
+function startTracking(){
+  if (tracking) return;
+  tracking = true;
+  trackTodayCheckbox.checked = true;
+  enableControlsForTracking(true);
+  const ms = nowMsFromStart();
+  currentMs = Math.min(Math.max(0, ms), totalMs);
+  updateProgressAndIndicatorFromMs(currentMs);
+  updateLabelForTracking();
+  trackInterval = setInterval(()=> {
+    const nowMs = nowMsFromStart();
+    currentMs = Math.min(Math.max(0, nowMs), totalMs);
+    updateProgressAndIndicatorFromMs(currentMs);
+    updateLabelForTracking();
+  }, 250);
+}
+function stopTracking(){
+  if (!tracking) return;
+  tracking = false;
+  trackTodayCheckbox.checked = false;
+  enableControlsForTracking(false);
+  if (trackInterval){ clearInterval(trackInterval); trackInterval = null; }
+  indicatorSub.textContent = '';
+  updateProgressAndIndicatorFromMs(currentMs);
+}
+function updateLabelForTracking(){
+  const nowEpoch = Date.now();
+  const msFromStart = nowEpoch - START.getTime();
+  const clampedMs = Math.min(Math.max(0, msFromStart), totalMs);
+  const frac = clampedMs / totalMs;
+  const percent = (frac * 100);
+  const pctStr = percent.toFixed(3) + '%';
+  const etStr = getNowInEasternISO();
+  indicatorDate.childNodes[0].nodeValue = etStr;
+  indicatorSub.textContent = pctStr;
+}
+
+function play(){
+  if (playing) return;
+  if (tracking) return;
+  playing = true;
+  playPauseBtn.textContent = 'Pause';
+  lastRAF = performance.now();
+  requestAnimationFrame(rafStep);
+}
+function pause(){
+  playing = false;
+  playPauseBtn.textContent = 'Play';
+}
+function rafStep(ts){
+  if (!playing) return;
+  const dt = ts - lastRAF; lastRAF = ts;
+  const baseDurationMs = 60000;
+  const deltaMs = dt * (totalMs / baseDurationMs) * playSpeed;
+  currentMs += deltaMs;
+  if (currentMs > totalMs) {
+    currentMs = totalMs;
+    updateProgressAndIndicatorFromMs(currentMs);
+    pause();
+    return;
+  }
+  updateProgressAndIndicatorFromMs(currentMs);
+  requestAnimationFrame(rafStep);
+}
+
+playPauseBtn.addEventListener('click', ()=>{ if (tracking) return; if (playing) pause(); else play(); });
+speedInput.addEventListener('input', ()=>{ playSpeed = parseFloat(speedInput.value); speedVal.textContent = playSpeed.toFixed(1) + '×'; });
+
+// Clicking track jumps when not dragging
+let isDragging = false;
+function pointerPositionToMs(clientX){
+  const rect = trackEl.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const pct = Math.min(1, Math.max(0, x / rect.width));
+  return pct * totalMs;
+}
+function pointerPositionToPct(clientX){
+  const rect = trackEl.getBoundingClientRect();
+  const x = clientX - rect.left;
+  return Math.min(1, Math.max(0, x / rect.width));
+}
+
+function startDrag(ev){
+  if (tracking) stopTracking();
+  isDragging = true;
+  playPauseBtn.disabled = true;
+  if (ev.target.setPointerCapture) {
+    try { ev.target.setPointerCapture(ev.pointerId); } catch(e) {}
+  }
+  const ms = pointerPositionToMs(ev.clientX);
+  currentMs = ms;
+  updateProgressAndIndicatorFromMs(currentMs);
+  const pct = pointerPositionToPct(ev.clientX);
+  indicatorSub.textContent = (pct*100).toFixed(3) + '%';
+  window.addEventListener('pointermove', onDragMove);
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', endDrag);
+  ev.preventDefault();
+}
+function onDragMove(ev){
+  if (!isDragging) return;
+  const ms = pointerPositionToMs(ev.clientX);
+  currentMs = ms;
+  updateProgressAndIndicatorFromMs(currentMs);
+  const pct = pointerPositionToPct(ev.clientX);
+  indicatorSub.textContent = (pct*100).toFixed(3) + '%';
+}
+function endDrag(ev){
+  if (!isDragging) return;
+  isDragging = false;
+  playPauseBtn.disabled = false;
+  if (ev && ev.target && ev.target.releasePointerCapture) {
+    try { ev.target.releasePointerCapture(ev.pointerId); } catch(e) {}
+  }
+  window.removeEventListener('pointermove', onDragMove);
+  window.removeEventListener('pointerup', endDrag);
+  window.removeEventListener('pointercancel', endDrag);
+  setTimeout(()=> { if (!tracking) indicatorSub.textContent = ''; }, 1000);
+}
+
+indicator.addEventListener('pointerdown', startDrag);
+trackEl.addEventListener('pointerdown', (ev) => { startDrag(ev); });
+trackTodayCheckbox.addEventListener('change', (e)=>{ if (trackTodayCheckbox.checked){ pause(); startTracking(); } else { stopTracking(); } });
+
+// Pin color / stem color
+function applyPinColor(color){ document.documentElement.style.setProperty('--pin-color', color); Array.from(document.querySelectorAll('.pin')).forEach(el => el.style.background = color); }
+function applyStemColor(color){ document.documentElement.style.setProperty('--pin-stem', color); }
+pinColorInput.addEventListener('input', (e)=> applyPinColor(e.target.value));
+stemColorInput.addEventListener('input', (e)=> applyStemColor(e.target.value));
+
+/* Initialization: load existing pins from Supabase and subscribe to realtime updates */
+async function init(){
+  // Load all pins from Supabase
+  await loadPinsFromSupabase();
+  // Render them
+  renderPins();
+  // Start realtime subscription for INSERTs
+  subscribeToPinInserts();
+  // Set initial indicator
+  currentMs = 0;
+  updateProgressAndIndicatorFromMs(currentMs);
+  speedVal.textContent = playSpeed.toFixed(1) + '×';
+  // Apply initial colors
+  applyPinColor(pinColorInput.value);
+  applyStemColor(stemColorInput.value);
+  // Handle window resize if you want to re-render ticks/labels (not used here)
+}
+init();
+
+/* Public API (keeps previous shape but routes to Supabase) */
+window.timelineAPI = {
+  // addPin: inserts to Supabase and returns inserted row (or null)
+  async addPin(obj){
+    if (!obj || !obj.date || !obj.title) throw new Error('addPin expects {date, title}');
+    const inserted = await insertPinToSupabase({ date: obj.date, title: obj.title });
+    if (inserted && !pinsData.some(p => p.id === inserted.id)) {
+      pinsData.push({ id: inserted.id, date: inserted.date, title: inserted.title });
+      renderPins();
+    }
+    return inserted;
+  },
+  // setTimeTo same as before
+  setTimeTo(dateStr){
+    const ms = new Date(dateStr + 'T00:00:00Z') - START;
+    currentMs = Math.min(Math.max(0, ms), totalMs);
+    updateProgressAndIndicatorFromMs(currentMs);
+  },
+  play(){ if (!tracking) play(); },
+  pause(){ pause(); },
+  getPins(){ return pinsData.slice(); },
+  startTracking(){ startTracking(); },
+  stopTracking(){ stopTracking(); },
+  isTracking(){ return tracking; },
+  // Export current pins to JSON file
+  exportPins(){ downloadPinsFile(); }
+};
+</script>
+</body>
+</html>
